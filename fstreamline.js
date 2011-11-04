@@ -41,11 +41,13 @@ function create(fn, idx) {
 		// Start a new fiber
 		var that = this, args = arguments;
 		new Fiber(function() {
+			var val;
 			try {
-				memoize(null, fn.apply(that, args));
+				val = fn.apply(that, args);
 			} catch (err) {
 				memoize(err);
 			}
+			memoize(null, val);
 		}).run();
 
 		// Return a future if no callback
