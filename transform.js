@@ -13,7 +13,7 @@ var Walker = require('./walker');
 /**
  * Finds all variables which have been declared locally in this function.
  */
-function getLocals(fn) {
+function getLocals(fn, recurse) {
 	var names = Object.create(null);
 	function decl() {
 		var vars = this.children;
@@ -26,7 +26,12 @@ function getLocals(fn) {
 			if (this.functionForm !== 1) {
 				names[this.name] = this.name;
 			}
-			// Don't walk further
+			// Don't walk further by default
+			if (recurse) {
+				for (var ii in getLocals(this, true)) {
+					names[ii] =ii;
+				}
+			}
 		},
 		'var': decl,
 		'const': decl,
@@ -66,6 +71,7 @@ function transform(source, options) {
 	var scope = Object.create(null);
 	var streamlined = Object.create(null);
 	var verboten = Object.create(null);
+	var allIdentifiers;
 
 	/**
 	 * Walks a parse tree and finds all functions which have been declared as streamline functions.
@@ -189,7 +195,7 @@ function transform(source, options) {
 			var hoisted = [];
 			for (var ii in localStreamlined.declared) {
 				var fragment = '_', len = 1;
-				while (scope[ii+ fragment]) {
+				while (scope[ii+ fragment] || allIdentifiers[ii+ fragment]) {
 					fragment = Array(++len + 1).join('_');
 				}
 				scope[ii] = ii+ fragment;
@@ -292,7 +298,9 @@ function transform(source, options) {
 		'\n}.call(this, function(err) {\n'+
 		'  if (err) throw err;\n'+
 		'}));';
-	walk(Narcissus.parser.parse(source));
+	var parsed = Narcissus.parser.parse(source);
+	allIdentifiers = getLocals(parsed.children[1].expression.children[0].children[0], true);
+	walk(parsed);
 	buffer += source.substring(position);
 
 	if (didRewrite > 1) {
