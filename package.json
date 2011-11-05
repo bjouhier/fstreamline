@@ -1,11 +1,11 @@
 {
 	"name": "fstreamline",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "streamlinejs written with fibers and minimal rewriting",
 	"author": "Marcel Laverdet <marcel@laverdet.com> (https://github.com/laverdet/)",
 	"dependencies": {
 		"fibers": "",
-		"uglifyjs": ""
+		"narcissus": ""
 	},
 	"main": "fstreamline",
 	"os": ["macos", "linux"],

@@ -3,10 +3,10 @@ this.create = create;
 this.invoke = invoke;
 this.transform = transform;
 
-var marker = {};
 require('fibers');
-var jsp = require('uglify-js/lib/parse-js');
-var uglify = require('uglify-js/lib/process');
+var Narcissus = require('narcissus');
+var t = Narcissus.definitions.tokenIds;
+var Walker = require('./walker');
 
 // TODO function declaraction hoisting
 // TODO ensure `foo(_)` calls have a bounding fiber. streamline is smart enough to allow this:
@@ -19,11 +19,11 @@ var uglify = require('uglify-js/lib/process');
  *
  * rewrite:
  * function foo(arg, _) {
- *   ...
+ *	 ...
  * }
  * ->
  * var foo = create(foo(arg, _) {
- *   ...
+ *	 ...
  * }, 1);
  */
 function create(fn, idx) {
@@ -121,18 +121,32 @@ function transform(source, options) {
 	options = options || {};
 	var callback = options.callback || '_';
 	var didRewrite = false;
+	var position = 0;
+	var buffer = '';
+
+	/**
+	 * Adds to `buffer` everything that hasn't been rendered so far.
+	 */
+	function catchup(node, finish) {
+		var until = finish ? node.end : node.start;
+		if (until > position) {
+			buffer += source.substring(position, until);
+			position = until;
+		}
+	}
 
 	/**
 	 * Finds the index of the callback param in an argument list, -1 if not found.
 	 */
-	function findCallback(args) {
+	function getCallback(args, lineno) {
 		var idx = -1;
 		for (var ii = 0; ii < args.length; ++ii) {
-			if (args[ii] === callback || (args[ii][0] === 'name' && args[ii][1] === callback)) {
+			if (args[ii] === callback || (args[ii].type === t.IDENTIFIER && args[ii].value === callback)) {
 				if (idx === -1) {
 					idx = ii;
 				} else {
-					throw new Error('Callback argument used more than once in function call');
+					lineno = lineno || args[ii].lineno;
+					throw new Error('Callback argument used more than once in function call on line '+ lineno);
 				}
 			}
 		}
@@ -140,77 +154,82 @@ function transform(source, options) {
 		return idx;
 	}
 
-	/**
-	 * Rewriter for a function expression or declaration
-	 */
-	function fun(name, args, body) {
-		// Sanity check
-		if (name === callback) {
-			throw new Error('Invalid usage of callback');
-		}
-
-		// Find callback arg
-		var idx = findCallback(args);
-		if (idx === -1) {
-			return false;
-		}
-
-		// Wrap with fiberize version
-		return ['call', ['name', 'fstreamline__.create'], [['function', name, args, body.map(walker.walk)], ['num', idx]]];
-	}
-
-	var walker = new uglify.ast_walker;
-	var processed = walker.with_walkers({
-		'defun': function(name, args, body) {
-			var rewrite = fun(name, args, body);
-			if (rewrite) {
-				return ['var', [[name, rewrite]]];
-			}
-			return ['defun', name, args, body.map(walker.walk)];
-		},
+	var walk = Walker({
 		'function': function(name, args, body) {
-			var rewrite = fun(name, args, body);
-			if (rewrite) {
-				return rewrite;
+			catchup(this);
+			var idx = getCallback(args, this.lineno);
+			if (idx !== -1) {
+				// Rewrite streamlined functions
+				if (this.functionForm !== 1) {
+					buffer += 'var '+ name + ' = ';
+				}
+				buffer += 'fstreamline__.create(';
+				body.map(walk);
+				catchup(this, true);
+				buffer += ', '+ idx;
+				buffer += this.functionForm === 1 ? ')' : ');';
+			} else {
+				body.map(walk);
 			}
-			return ['function', name, args, body.map(walker.walk)];
 		},
 		'call': function(expr, args) {
-			// If this is an async function then rewrite into a waiting call
-			var idx = findCallback(args);
-			if (idx === -1) {
-				return ['call', walker.walk(expr), args.map(walker.walk)];
-			}
+			var idx = getCallback(args);
 			if (idx !== -1) {
-				args = ['array', args.map(function(ii) {
-					return (ii[0] === 'name' && ii[1] === callback) ? ii : walker.walk(ii);
-				})];
-				idx = ['num', idx];
-				expr = walker.walk(expr);
-				if (expr[0] === 'dot') {
-					// Calling a method
-					return ['call', ['name', 'fstreamline__.invoke'], [expr[1], ['string', expr[2]], args, idx]];
+				// Rewrite streamlined calls
+				catchup(this);
+				buffer += 'fstreamline__.invoke(';
+				if (expr.type === t.DOT) {
+					// Method call: foo.bar(_)
+					walk(expr.children[0]);
+					catchup(expr.children[0], true);
+					buffer += ', '+ JSON.stringify(expr.children[1].value);
+				} else if (expr.type === t.INDEX) {
+					// Dynamic method call: foo[bar](_)
+					walk(expr.children[0]);
+					catchup(expr.children[0], true);
+					buffer += ', ';
+					walk(expr.children[1]);
+					catchup(expr.children[1], true);
 				} else {
-					// Calling a function
-					return ['call', ['name', 'fstreamline__.invoke'], [['atom', 'null'], expr, args, idx]];
+					// Function call
+					buffer += 'null, ';
+					walk(expr);
+					catchup(expr, true);
 				}
+				// Render arguments
+				buffer += ', [';
+				if (args.length) {
+					position = args[0].start;
+					for (var ii = 0; ii < args.length; ++ii) {
+						if (ii !== idx) {
+							walk(args[ii]);
+						}
+					}
+					catchup(args[args.length - 1], true);
+				}
+				buffer += '], '+ idx+ ')';
+				position = this.end + 1; // this.end doesn't include closing paren?
+			} else {
+				walk(expr);
+				args.map(walk);
 			}
 		},
-		'name': function(name) {
+		'identifier': function(name) {
 			if (name === callback) {
-				throw new Error('Invalid usage of callback');
+				throw new Error('Invalid usage of callback on line '+ this.lineno);
 			}
-			return ['name', name];
 		},
-	}, function() {
-		return walker.walk(jsp.parse(source))
 	});
+
+	// Walk parsed source, rendering along the way
+	walk(Narcissus.parser.parse(source));
+	buffer += source.substring(position);
 
 	if (didRewrite) {
 		// Wrap with library stuff
-		return 'var fstreamline__ = require("fstreamline"); fstreamline__.create(function(_) {\n' +
-			uglify.gen_code(processed, {beautify: true}) +
-			'\n}).call(this, function(err) {\n  if (err) throw err;\n});';
+		return 'var fstreamline__ = require("fstreamline"); fstreamline__.create(function(_) {'+
+			buffer+
+			'\n}).call(this, function(err) {\n	if (err) throw err;\n});';
 	} else {
 		return source;
 	}
