@@ -13,6 +13,9 @@ function Walker(visitors) {
 	}
 	return function walk(node) {
 		var type = node.type;
+		if (type === undefined) {
+			throw new Error('Trying to walk unknown node!');
+		}
 		switch (type) {
 			case t.FUNCTION:
 			case t.GETTER:
@@ -97,7 +100,7 @@ function Walker(visitors) {
 				} else {
 					walk(node.tryBlock);
 					node.catchClauses.map(walk);
-					walk(node.finallyBlock);
+					node.finallyBlock && walk(node.finallyBlock);
 				}
 				break;
 
