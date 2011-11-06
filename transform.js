@@ -250,7 +250,7 @@ function transform(source, options) {
 					walk(expr.children[0]);
 					catchup(expr.children[0].end);
 					buffer += ', ';
-					position = expr.children[1].start; // skip opening [
+					position = expr.children[1].start;
 					walk(expr.children[1]);
 					catchup(expr.children[1].end);
 				} else {
