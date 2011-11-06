@@ -250,6 +250,7 @@ function transform(source, options) {
 					walk(expr.children[0]);
 					catchup(expr.children[0].end);
 					buffer += ', ';
+					position = expr.children[1].start; // skip opening [
 					walk(expr.children[1]);
 					catchup(expr.children[1].end);
 				} else {
@@ -270,7 +271,7 @@ function transform(source, options) {
 					catchup(args[args.length - 1].end);
 				}
 				buffer += '], '+ idx+ ')';
-				position = this.end + 1; // this.end doesn't include closing paren?
+				position = this.end;
 				++didRewrite;
 			} else {
 				walk(expr);
@@ -283,9 +284,15 @@ function transform(source, options) {
 			} else if (verboten[name]) {
 				throw new Error('Invalid use of indentifier `'+ name+ '` on line '+ this.lineno);
 			}
-			catchup(this.start);
-			buffer += scope[name] || name;
-			position = this.end;
+			if (scope[name]) {
+				catchup(this.start);
+				buffer += scope[name];
+				position = this.end;
+			} else {
+				// catchup to end will deal with all sort of oddities, like object initializer keys that are 
+				// parsed as identifiers but need to be quoted.
+				catchup(this.end);
+			}
 			initializer && walk(initializer);
 		},
 	});

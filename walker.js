@@ -12,6 +12,9 @@ function Walker(visitors) {
 		visitors[t[ii.toUpperCase()]] = visitors[ii];
 	}
 	return function walk(node) {
+		if (!node) { // this test deals with "return;" statements for example (value is undefined)
+			return;
+		}
 		var type = node.type;
 		if (type === undefined) {
 			throw new Error('Trying to walk unknown node!');
